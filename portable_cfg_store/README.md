@@ -109,3 +109,21 @@ CRC detects accidental corruption only. It does not provide confidentiality, aut
 ## License
 
 MIT. This repository is an original, product-neutral implementation; it intentionally contains no proprietary product source, memory map, credentials, or schema.
+
+## Optional cJSON adapter
+
+Disabled by default (`PCFG_BUILD_CJSON_ADAPTER=OFF`). Supply an existing CMake cJSON target **before** adding this module, then enable the option and set `PCFG_CJSON_TARGET` to its name. cJSON is not downloaded or vendored by the module.
+
+```cmake
+add_subdirectory(path/to/cJSON)
+set(PCFG_BUILD_CJSON_ADAPTER ON CACHE BOOL "" FORCE)
+set(PCFG_CJSON_TARGET cjson CACHE STRING "" FORCE)
+add_subdirectory(path/to/portable_cfg_store)
+target_link_libraries(your_app PRIVATE pcfg_cjson)
+```
+
+`pcfg_cjson_init` validates borrowed default bytes (keep them alive until destroy). `pcfg_cjson_load` validates each stored candidate before selection and uses defaults only for blank storage; fallback never auto-saves. `pcfg_cjson_load_default` explicitly replaces the RAM document without persistence. Save and factory reset clear dirty only on success; reset failure preserves the previous RAM document. After an ambiguous storage failure reload the store before retrying.
+
+Paths are object-only, case-sensitive, dot-separated; each segment is 1–63 bytes. Arrays, duplicate keys, literal dotted keys, and implicit scalar-type replacement are rejected. Set operations create missing parents on a private tree copy; failures leave the original tree unchanged. Integers must be finite, integral, and within signed 32-bit range. Serialized `required_size` excludes the NUL; provide `required_size + 1` bytes.
+
+The document owns its private tree. Treat all struct fields as private and never cast `root` to mutate it. Only const trees are passed to semantic validators. The adapter allocates through cJSON allocator hooks; configure hooks once before creating documents, and do not change them while documents exist. Allocation failures return an error; the core itself remains heap-free.
