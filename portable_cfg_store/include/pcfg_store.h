@@ -69,6 +69,7 @@ typedef struct
     uint32_t active_sequence;
     bool scan_complete;
     bool read_only;
+    bool reload_required;
 } pcfg_store_t;
 
 pcfg_status_t pcfg_init(pcfg_store_t *store,
@@ -100,6 +101,7 @@ pcfg_status_t pcfg_factory_reset(pcfg_store_t *store,
 int pcfg_active_slot(const pcfg_store_t *store);
 uint32_t pcfg_active_sequence(const pcfg_store_t *store);
 bool pcfg_is_read_only(const pcfg_store_t *store);
+bool pcfg_reload_required(const pcfg_store_t *store);
 
 #ifdef __cplusplus
 }

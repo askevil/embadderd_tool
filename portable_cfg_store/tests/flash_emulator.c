@@ -8,16 +8,34 @@ static int range_valid(const pcfg_flash_t *flash, uint32_t address, size_t size)
     return (size <= flash->size) && ((size_t)address <= (flash->size - size));
 }
 
+static int fault_matches(const pcfg_flash_t *flash)
+{
+    return (flash->fault_enabled != 0) &&
+           (flash->operation_count == flash->fault_operation);
+}
+
+static size_t fault_prefix(const pcfg_flash_t *flash, size_t size)
+{
+    return (flash->fault_after_bytes < size) ? flash->fault_after_bytes : size;
+}
+
 static pcfg_status_t flash_read(void *ctx, uint32_t address, void *dst,
                                 size_t size)
 {
     pcfg_flash_t *flash = (pcfg_flash_t *)ctx;
+    size_t prefix;
     flash->operation_count++;
     if ((dst == NULL) || !range_valid(flash, address, size))
     {
         return PCFG_STORAGE_ERROR;
     }
-    memcpy(dst, flash->bytes + address, size);
+    prefix = fault_matches(flash) ? fault_prefix(flash, size) : size;
+    memcpy(dst, flash->bytes + address, prefix);
+    if (fault_matches(flash))
+    {
+        flash->fault_enabled = 0;
+        return PCFG_STORAGE_ERROR;
+    }
     return PCFG_OK;
 }
 
@@ -27,6 +45,8 @@ static pcfg_status_t flash_program(void *ctx, uint32_t address,
     pcfg_flash_t *flash = (pcfg_flash_t *)ctx;
     const uint8_t *input = (const uint8_t *)src;
     size_t index;
+    size_t prefix;
+    int injected;
     flash->operation_count++;
 
     if ((input == NULL) || !range_valid(flash, address, size) ||
@@ -38,25 +58,40 @@ static pcfg_status_t flash_program(void *ctx, uint32_t address,
     {
         return PCFG_STORAGE_ERROR;
     }
-
-    for (index = 0u; index < size; ++index)
+    injected = fault_matches(flash);
+    prefix = injected ? fault_prefix(flash, size) : size;
+    for (index = 0u; index < prefix; ++index)
     {
         if ((flash->bytes[address + index] & input[index]) != input[index])
         {
+            if (injected)
+            {
+                flash->fault_enabled = 0;
+            }
             return PCFG_STORAGE_ERROR;
         }
     }
-    for (index = 0u; index < size; ++index)
+    for (index = 0u; index < prefix; ++index)
     {
         flash->bytes[address + index] &= input[index];
     }
-    flash->mutation_count++;
+    if (prefix != 0u)
+    {
+        flash->mutation_count++;
+    }
+    if (injected)
+    {
+        flash->fault_enabled = 0;
+        return PCFG_STORAGE_ERROR;
+    }
     return PCFG_OK;
 }
 
 static pcfg_status_t flash_erase(void *ctx, uint32_t address, size_t size)
 {
     pcfg_flash_t *flash = (pcfg_flash_t *)ctx;
+    size_t prefix;
+    int injected;
     flash->operation_count++;
     if (!range_valid(flash, address, size) ||
         ((address % flash->erase_unit) != 0u) ||
@@ -64,8 +99,18 @@ static pcfg_status_t flash_erase(void *ctx, uint32_t address, size_t size)
     {
         return PCFG_STORAGE_ERROR;
     }
-    memset(flash->bytes + address, 0xff, size);
-    flash->mutation_count++;
+    injected = fault_matches(flash);
+    prefix = injected ? fault_prefix(flash, size) : size;
+    memset(flash->bytes + address, 0xff, prefix);
+    if (prefix != 0u)
+    {
+        flash->mutation_count++;
+    }
+    if (injected)
+    {
+        flash->fault_enabled = 0;
+        return PCFG_STORAGE_ERROR;
+    }
     return PCFG_OK;
 }
 
@@ -73,6 +118,11 @@ static pcfg_status_t flash_sync(void *ctx)
 {
     pcfg_flash_t *flash = (pcfg_flash_t *)ctx;
     flash->operation_count++;
+    if (fault_matches(flash))
+    {
+        flash->fault_enabled = 0;
+        return PCFG_STORAGE_ERROR;
+    }
     return PCFG_OK;
 }
 
@@ -86,6 +136,8 @@ void pcfg_flash_init(pcfg_flash_t *flash, uint8_t *bytes, size_t size,
     flash->erase_unit = erase_unit;
     flash->program_unit = program_unit;
     flash->page_size = page_size;
+    flash->fault_operation = SIZE_MAX;
+    flash->fault_after_bytes = SIZE_MAX;
     if (erase_contents != 0)
     {
         memset(bytes, 0xff, size);
@@ -94,6 +146,7 @@ void pcfg_flash_init(pcfg_flash_t *flash, uint8_t *bytes, size_t size,
 
 void pcfg_flash_reset_faults(pcfg_flash_t *flash)
 {
+    flash->operation_count = 0u;
     flash->fault_enabled = 0;
     flash->fault_operation = SIZE_MAX;
     flash->fault_after_bytes = SIZE_MAX;

@@ -45,4 +45,22 @@ if(PCFG_BUILD_TESTS)
     target_link_libraries(test_load PRIVATE pcfg_store)
     target_compile_options(test_load PRIVATE -Wall -Wextra -Werror -Wpedantic)
     add_test(NAME pcfg_load COMMAND test_load)
+
+    add_executable(test_save
+        tests/test_save.c
+        tests/flash_emulator.c
+    )
+    target_include_directories(test_save PRIVATE tests src)
+    target_link_libraries(test_save PRIVATE pcfg_store)
+    target_compile_options(test_save PRIVATE -Wall -Wextra -Werror -Wpedantic)
+    add_test(NAME pcfg_save COMMAND test_save)
+
+    add_executable(test_fault_injection
+        tests/test_fault_injection.c
+        tests/flash_emulator.c
+    )
+    target_include_directories(test_fault_injection PRIVATE tests src)
+    target_link_libraries(test_fault_injection PRIVATE pcfg_store)
+    target_compile_options(test_fault_injection PRIVATE -Wall -Wextra -Werror -Wpedantic)
+    add_test(NAME pcfg_fault_injection COMMAND test_fault_injection)
 endif()
