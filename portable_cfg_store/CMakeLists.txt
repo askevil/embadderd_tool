@@ -9,6 +9,7 @@ option(PCFG_ENABLE_SANITIZERS "Enable ASan and UBSan" OFF)
 
 add_library(pcfg_store STATIC
     src/pcfg_crc32.c
+    src/pcfg_store.c
 )
 target_include_directories(pcfg_store PUBLIC include PRIVATE src)
 target_compile_features(pcfg_store PUBLIC c_std_99)
@@ -26,4 +27,13 @@ if(PCFG_BUILD_TESTS)
     target_link_libraries(test_crc_media PRIVATE pcfg_store)
     target_compile_options(test_crc_media PRIVATE -Wall -Wextra -Werror -Wpedantic)
     add_test(NAME pcfg_crc_media COMMAND test_crc_media)
+
+    add_executable(test_store
+        tests/test_store.c
+        tests/flash_emulator.c
+    )
+    target_include_directories(test_store PRIVATE tests src)
+    target_link_libraries(test_store PRIVATE pcfg_store)
+    target_compile_options(test_store PRIVATE -Wall -Wextra -Werror -Wpedantic)
+    add_test(NAME pcfg_store COMMAND test_store)
 endif()

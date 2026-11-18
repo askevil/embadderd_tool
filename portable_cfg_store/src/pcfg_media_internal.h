@@ -7,6 +7,12 @@
 
 #include "pcfg_crc32.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+#define PCFG_MEDIA_MAYBE_UNUSED __attribute__((unused))
+#else
+#define PCFG_MEDIA_MAYBE_UNUSED
+#endif
+
 #define PCFG_MEDIA_HEADER_SIZE 32u
 #define PCFG_MEDIA_COMMIT_SIZE 16u
 #define PCFG_MEDIA_FORMAT_VERSION 1u
@@ -34,13 +40,13 @@ typedef struct
     uint32_t payload_crc32;
 } pcfg_media_commit_t;
 
-static uint16_t pcfg_get_le16(const uint8_t *bytes)
+PCFG_MEDIA_MAYBE_UNUSED static uint16_t pcfg_get_le16(const uint8_t *bytes)
 {
     return (uint16_t)((uint16_t)bytes[0] |
                       ((uint16_t)bytes[1] << 8u));
 }
 
-static uint32_t pcfg_get_le32(const uint8_t *bytes)
+PCFG_MEDIA_MAYBE_UNUSED static uint32_t pcfg_get_le32(const uint8_t *bytes)
 {
     return (uint32_t)bytes[0] |
            ((uint32_t)bytes[1] << 8u) |
@@ -48,13 +54,13 @@ static uint32_t pcfg_get_le32(const uint8_t *bytes)
            ((uint32_t)bytes[3] << 24u);
 }
 
-static void pcfg_put_le16(uint8_t *bytes, uint16_t value)
+PCFG_MEDIA_MAYBE_UNUSED static void pcfg_put_le16(uint8_t *bytes, uint16_t value)
 {
     bytes[0] = (uint8_t)value;
     bytes[1] = (uint8_t)(value >> 8u);
 }
 
-static void pcfg_put_le32(uint8_t *bytes, uint32_t value)
+PCFG_MEDIA_MAYBE_UNUSED static void pcfg_put_le32(uint8_t *bytes, uint32_t value)
 {
     bytes[0] = (uint8_t)value;
     bytes[1] = (uint8_t)(value >> 8u);
@@ -62,7 +68,7 @@ static void pcfg_put_le32(uint8_t *bytes, uint32_t value)
     bytes[3] = (uint8_t)(value >> 24u);
 }
 
-static uint32_t pcfg_media_header_crc(const uint8_t bytes[PCFG_MEDIA_HEADER_SIZE])
+PCFG_MEDIA_MAYBE_UNUSED static uint32_t pcfg_media_header_crc(const uint8_t bytes[PCFG_MEDIA_HEADER_SIZE])
 {
     uint32_t state = pcfg_crc32_init();
     state = pcfg_crc32_update(state, bytes, 24u);
@@ -70,7 +76,7 @@ static uint32_t pcfg_media_header_crc(const uint8_t bytes[PCFG_MEDIA_HEADER_SIZE
     return pcfg_crc32_finish(state);
 }
 
-static void pcfg_media_encode_header(uint8_t bytes[PCFG_MEDIA_HEADER_SIZE],
+PCFG_MEDIA_MAYBE_UNUSED static void pcfg_media_encode_header(uint8_t bytes[PCFG_MEDIA_HEADER_SIZE],
                                      const pcfg_media_header_t *header)
 {
     memset(bytes, 0, PCFG_MEDIA_HEADER_SIZE);
@@ -83,7 +89,7 @@ static void pcfg_media_encode_header(uint8_t bytes[PCFG_MEDIA_HEADER_SIZE],
     pcfg_put_le32(bytes + 24u, pcfg_media_header_crc(bytes));
 }
 
-static pcfg_media_result_t pcfg_media_decode_header(
+PCFG_MEDIA_MAYBE_UNUSED static pcfg_media_result_t pcfg_media_decode_header(
     const uint8_t bytes[PCFG_MEDIA_HEADER_SIZE],
     uint32_t expected_magic,
     pcfg_media_header_t *header)
@@ -109,7 +115,7 @@ static pcfg_media_result_t pcfg_media_decode_header(
     return PCFG_MEDIA_VALID;
 }
 
-static void pcfg_media_encode_commit(uint8_t bytes[PCFG_MEDIA_COMMIT_SIZE],
+PCFG_MEDIA_MAYBE_UNUSED static void pcfg_media_encode_commit(uint8_t bytes[PCFG_MEDIA_COMMIT_SIZE],
                                      const pcfg_media_commit_t *commit)
 {
     memset(bytes, 0, PCFG_MEDIA_COMMIT_SIZE);
@@ -119,7 +125,7 @@ static void pcfg_media_encode_commit(uint8_t bytes[PCFG_MEDIA_COMMIT_SIZE],
     pcfg_put_le32(bytes + 12u, pcfg_crc32(bytes, 12u));
 }
 
-static pcfg_media_result_t pcfg_media_decode_commit(
+PCFG_MEDIA_MAYBE_UNUSED static pcfg_media_result_t pcfg_media_decode_commit(
     const uint8_t bytes[PCFG_MEDIA_COMMIT_SIZE],
     pcfg_media_commit_t *commit)
 {
