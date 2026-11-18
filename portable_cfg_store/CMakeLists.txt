@@ -36,4 +36,13 @@ if(PCFG_BUILD_TESTS)
     target_link_libraries(test_store PRIVATE pcfg_store)
     target_compile_options(test_store PRIVATE -Wall -Wextra -Werror -Wpedantic)
     add_test(NAME pcfg_store COMMAND test_store)
+
+    add_executable(test_load
+        tests/test_load.c
+        tests/flash_emulator.c
+    )
+    target_include_directories(test_load PRIVATE tests src)
+    target_link_libraries(test_load PRIVATE pcfg_store)
+    target_compile_options(test_load PRIVATE -Wall -Wextra -Werror -Wpedantic)
+    add_test(NAME pcfg_load COMMAND test_load)
 endif()

@@ -22,7 +22,9 @@ typedef enum
     PCFG_UNSUPPORTED_VERSION,
     PCFG_VALIDATION_FAILED,
     PCFG_READ_ONLY,
-    PCFG_UNSUPPORTED_GEOMETRY
+    PCFG_UNSUPPORTED_GEOMETRY,
+    PCFG_SCRATCH_TOO_SMALL,
+    PCFG_SEQUENCE_AMBIGUOUS
 } pcfg_status_t;
 
 typedef pcfg_status_t (*pcfg_read_fn)(void *ctx, uint32_t address,
