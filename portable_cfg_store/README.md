@@ -78,7 +78,7 @@ A failed save after erase/program/sync begins is ambiguous: the medium can conta
 
 ## Scratch buffer
 
-The core never allocates. Save uses scratch in chunks. Load keeps a candidate payload in scratch before semantic validation and before touching the caller output, so scratch must hold the largest payload you want to load. This preserves the guarantee that failed loads leave the output buffer unchanged.
+The core never allocates. Save uses scratch in chunks. Cold-start semantic recovery (when a validator is supplied) also needs a full candidate; CRC-only cold recovery streams. Input/output must not overlap scratch. Load keeps a candidate payload in scratch before semantic validation and before touching the caller output, so scratch must hold the largest payload you want to load. This preserves the guarantee that failed loads leave the output buffer unchanged.
 
 ## Good fits
 
@@ -127,3 +127,9 @@ target_link_libraries(your_app PRIVATE pcfg_cjson)
 Paths are object-only, case-sensitive, dot-separated; each segment is 1–63 bytes. Arrays, duplicate keys, literal dotted keys, and implicit scalar-type replacement are rejected. Set operations create missing parents on a private tree copy; failures leave the original tree unchanged. Integers must be finite, integral, and within signed 32-bit range. Serialized `required_size` excludes the NUL; provide `required_size + 1` bytes.
 
 The document owns its private tree. Treat all struct fields as private and never cast `root` to mutate it. Only const trees are passed to semantic validators. The adapter allocates through cJSON allocator hooks; configure hooks once before creating documents, and do not change them while documents exist. Allocation failures return an error; the core itself remains heap-free.
+
+## Verification boundary and known build nits
+
+Host tests sweep every byte prefix of each I/O for warm/cold save and reset, with persistent/nonpersistent error outcomes, and require both old-or-new recovery and a successful later save. This does not replace real NOR power-cut tests.
+
+Known build nits: `PCFG_BUILD_EXAMPLES` is currently declared but the example follows `PCFG_BUILD_TESTS`; a core-only CMake configuration still requires a C++ compiler for the project declaration. These do not affect the C99 core ABI or runtime behavior.

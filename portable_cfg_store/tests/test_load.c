@@ -188,8 +188,10 @@ static void test_unknown_newer_slot_makes_supported_load_read_only(void)
     uint32_t address = LOAD_SLOT_SIZE;
     load_setup();
     encode_slot(0u, 7u, old_payload, sizeof(old_payload) - 1u);
+    encode_slot(1u,8u,old_payload,sizeof(old_payload)-1u);
     load_flash_bytes[address + 4u] = 2u;
     load_flash_bytes[address + 5u] = 0u;
+    pcfg_put_le32(load_flash_bytes+address+24,pcfg_media_header_crc(load_flash_bytes+address));
     TEST_ASSERT(load_init(&store, load_scratch, sizeof(load_scratch)) == PCFG_OK);
     TEST_ASSERT(pcfg_load(&store, load_output, sizeof(load_output),
                           &output_size, NULL, NULL) == PCFG_OK);
@@ -202,18 +204,152 @@ static void test_unknown_only_returns_unsupported(void)
     pcfg_store_t store;
     size_t output_size = 0u;
     load_setup();
+    encode_slot(1u,1u,(const uint8_t *)"new",3u);
     load_flash_bytes[LOAD_SLOT_SIZE + 0u] = 0x31u;
     load_flash_bytes[LOAD_SLOT_SIZE + 1u] = 0x46u;
     load_flash_bytes[LOAD_SLOT_SIZE + 2u] = 0x43u;
     load_flash_bytes[LOAD_SLOT_SIZE + 3u] = 0x50u;
     load_flash_bytes[LOAD_SLOT_SIZE + 4u] = 2u;
+    pcfg_put_le32(load_flash_bytes+LOAD_SLOT_SIZE+24,pcfg_media_header_crc(load_flash_bytes+LOAD_SLOT_SIZE));
     TEST_ASSERT(load_init(&store, load_scratch, sizeof(load_scratch)) == PCFG_OK);
     TEST_ASSERT(pcfg_load(&store, load_output, sizeof(load_output),
                           &output_size, NULL, NULL) == PCFG_UNSUPPORTED_VERSION);
 }
 
-int main(void)
+static void test_cold_save_preserves_unknown_format(void)
 {
+    static const uint8_t payload[] = "supported";
+    pcfg_store_t store;
+    load_setup();
+    encode_slot(0,1,payload,sizeof(payload)-1u);
+    encode_slot(1,2,payload,sizeof(payload)-1u);
+    load_flash_bytes[LOAD_SLOT_SIZE+4u]=2;
+    pcfg_put_le32(load_flash_bytes+LOAD_SLOT_SIZE+24,pcfg_media_header_crc(load_flash_bytes+LOAD_SLOT_SIZE));
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) == PCFG_READ_ONLY);
+    TEST_ASSERT(load_flash.mutation_count == 0);
+}
+static void test_cold_save_protects_payload_valid_older_slot(void)
+{
+    static const uint8_t payload[] = "supported";
+    pcfg_store_t store;
+    size_t output_size = 0;
+    load_setup();
+    encode_slot(0,1,payload,sizeof(payload)-1u);
+    encode_slot(1,2,payload,sizeof(payload)-1u);
+    load_flash_bytes[LOAD_SLOT_SIZE+PCFG_MEDIA_HEADER_SIZE] ^= 1;
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    /* Destroy the chosen target erase; old valid slot must survive. */
+    pcfg_flash_fail_operation(&load_flash,6,LOAD_SLOT_SIZE,1);
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) != PCFG_OK);
+    pcfg_flash_reset_faults(&load_flash);
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&output_size,NULL,NULL) == PCFG_OK);
+}
+static void test_ambiguous_sequence_repeated_save_stays_blocked(void)
+{
+    static const uint8_t payload[] = "supported";
+    pcfg_store_t store;
+    load_setup();
+    encode_slot(0,0,payload,sizeof(payload)-1u);
+    encode_slot(1,0x80000000u,payload,sizeof(payload)-1u);
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) == PCFG_SEQUENCE_AMBIGUOUS);
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) != PCFG_OK);
+    TEST_ASSERT(load_flash.mutation_count == 0);
+}
+static void test_failed_reload_cannot_clear_retry_guard(void)
+{
+    static const uint8_t payload[] = "supported";
+    pcfg_store_t store;
+    size_t output_size = 0;
+    load_setup(); encode_slot(0,1,payload,sizeof(payload)-1u);
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&output_size,NULL,NULL) == PCFG_OK);
+    pcfg_flash_reset_faults(&load_flash);
+    pcfg_flash_fail_operation(&load_flash,1,0,1);
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) != PCFG_OK);
+    TEST_ASSERT(pcfg_reload_required(&store));
+    pcfg_flash_reset_faults(&load_flash);
+    pcfg_flash_fail_operation(&load_flash,1,0,1);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&output_size,NULL,NULL) == PCFG_STORAGE_ERROR);
+    TEST_ASSERT(pcfg_reload_required(&store));
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) == PCFG_NOT_READY);
+}
+
+static void test_torn_header_does_not_permanently_lock_store(void)
+{
+    static const uint8_t payload[] = "supported";
+    pcfg_store_t store;
+    size_t size=0;
+    load_setup(); encode_slot(0,1,payload,sizeof(payload)-1u);
+    load_flash_bytes[LOAD_SLOT_SIZE]=0x31; /* prefix of interrupted v1 magic */
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&size,NULL,NULL) == PCFG_OK);
+    TEST_ASSERT(!pcfg_is_read_only(&store));
+    TEST_ASSERT(pcfg_save(&store,payload,sizeof(payload)-1u,NULL,NULL) == PCFG_OK);
+}
+static void test_scratch_aliases_rejected_before_io(void)
+{
+    static const uint8_t payload[] = "supported";
+    pcfg_store_t store;
+    size_t size=0;
+    size_t before;
+    load_setup(); encode_slot(0,1,payload,sizeof(payload)-1u);
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch)) == PCFG_OK);
+    before=load_flash.operation_count;
+    TEST_ASSERT(pcfg_load(&store,load_scratch,4,&size,NULL,NULL) == PCFG_INVALID_ARGUMENT);
+    TEST_ASSERT(pcfg_load(&store,load_scratch+4,4,&size,NULL,NULL) == PCFG_INVALID_ARGUMENT);
+    TEST_ASSERT(pcfg_save(&store,load_scratch+4,4,NULL,NULL) == PCFG_INVALID_ARGUMENT);
+    TEST_ASSERT(load_flash.operation_count == before);
+}
+
+static void test_half_range_only_considers_valid_payloads_and_equal_tie(void)
+{
+    static const uint8_t old[]="old";
+    static const uint8_t newest[]="newest";
+    pcfg_store_t store;
+    size_t size=0;
+    load_setup(); encode_slot(0,0,old,sizeof(old)-1u);
+    encode_slot(1,0x80000000u,newest,sizeof(newest)-1u);
+    load_flash_bytes[LOAD_SLOT_SIZE+PCFG_MEDIA_HEADER_SIZE]^=1;
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch))==PCFG_OK);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&size,NULL,NULL)==PCFG_OK);
+    TEST_ASSERT(pcfg_active_slot(&store)==0);
+    encode_slot(1,0,newest,sizeof(newest)-1u);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&size,NULL,NULL)==PCFG_OK);
+    TEST_ASSERT(pcfg_active_slot(&store)==0);
+    encode_slot(1,1,newest,sizeof(newest)-1u);
+    TEST_ASSERT(pcfg_load(&store,load_output,3,&size,reject_newest_only,NULL)==PCFG_OK);
+    TEST_ASSERT(size==3);
+}
+static void test_v1_metadata_damage_is_corrupt_not_future(void)
+{
+    static const uint8_t old[]="old";
+    pcfg_store_t store;
+    size_t size=0;
+    load_setup(); encode_slot(0,1,old,3); encode_slot(1,2,old,3);
+    load_flash_bytes[LOAD_SLOT_SIZE+28]^=1;
+    TEST_ASSERT(load_init(&store,load_scratch,sizeof(load_scratch))==PCFG_OK);
+    TEST_ASSERT(pcfg_load(&store,load_output,sizeof(load_output),&size,NULL,NULL)==PCFG_OK);
+    TEST_ASSERT(!pcfg_is_read_only(&store));
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1)
+    {
+        if (strcmp(argv[1],"half")==0) test_half_range_only_considers_valid_payloads_and_equal_tie();
+        if (strcmp(argv[1],"metadata")==0) test_v1_metadata_damage_is_corrupt_not_future();
+        if (strcmp(argv[1],"torn")==0) test_torn_header_does_not_permanently_lock_store();
+        if (strcmp(argv[1],"alias")==0) test_scratch_aliases_rejected_before_io();
+        if (strcmp(argv[1],"unknown")==0) test_cold_save_preserves_unknown_format();
+        if (strcmp(argv[1],"cold")==0) test_cold_save_protects_payload_valid_older_slot();
+        if (strcmp(argv[1],"ambiguous")==0) test_ambiguous_sequence_repeated_save_stays_blocked();
+        if (strcmp(argv[1],"reload")==0) test_failed_reload_cannot_clear_retry_guard();
+        return 0;
+    }
+
     RUN_TEST(test_blank_scan_returns_not_found_and_marks_scan_complete);
     RUN_TEST(test_newest_valid_slot_loads_and_reports_state);
     RUN_TEST(test_corrupt_newest_falls_back_to_older);
@@ -222,6 +358,14 @@ int main(void)
     RUN_TEST(test_wrap_safe_sequence_order_and_equal_tie_break);
     RUN_TEST(test_unknown_newer_slot_makes_supported_load_read_only);
     RUN_TEST(test_unknown_only_returns_unsupported);
+    RUN_TEST(test_cold_save_preserves_unknown_format);
+    RUN_TEST(test_cold_save_protects_payload_valid_older_slot);
+    RUN_TEST(test_ambiguous_sequence_repeated_save_stays_blocked);
+    RUN_TEST(test_failed_reload_cannot_clear_retry_guard);
+    RUN_TEST(test_torn_header_does_not_permanently_lock_store);
+    RUN_TEST(test_scratch_aliases_rejected_before_io);
+    RUN_TEST(test_half_range_only_considers_valid_payloads_and_equal_tie);
+    RUN_TEST(test_v1_metadata_damage_is_corrupt_not_future);
     puts("test_load: PASS");
     return 0;
 }

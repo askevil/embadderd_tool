@@ -360,3 +360,11 @@ The repository uses MIT: `Copyright (c) 2026 askevil contributors`. cJSON remain
 5. Public files contain no private paths, product addresses, product names, credentials, or copied source.
 6. README documents format and security boundaries.
 7. The approved result is committed and pushed to `main` of `askevil/embadderd_tool`.
+
+## 18. Implementation rulings (2026-11-18)
+
+- Load requires full-candidate scratch to preserve failure output and support contiguous semantic validators. Save CRC-only recovery and verification stream; semantic cold recovery needs full-candidate scratch. Payload input/output may not overlap scratch.
+- Unknown future media must retain the CRC-valid 32-byte envelope so v1 can distinguish it from a torn write. Different magic/version/layout with that envelope is protected; arbitrary unrecognizable future layouts require an application migration policy.
+- Setters use a private tree copy so allocation/path failures preserve RAM state. Codec allocation errors use PCFG_STORAGE_ERROR in this ABI.
+- Public statuses additionally include PCFG_SCRATCH_TOO_SMALL and PCFG_SEQUENCE_AMBIGUOUS; pcfg_store_t includes reload_required, with a getter. It is cleared only by trustworthy recovery or a successful commit.
+- Slot offset zero is permitted; the original geometry phrase about nonzero slot addresses does not apply to byte offset zero.

@@ -1,2 +1,6 @@
 
 .superpowers/
+
+build*/
+external/
+*.dsh-remote-edit-*.tmp

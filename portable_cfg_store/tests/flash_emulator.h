@@ -23,6 +23,8 @@ typedef struct
     size_t page_size;
     size_t operation_count;
     size_t mutation_count;
+    size_t operation_size[256];
+    size_t fault_hits;
     int fault_enabled;
     size_t fault_operation;
     size_t fault_after_bytes;

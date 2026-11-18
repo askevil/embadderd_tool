@@ -52,6 +52,15 @@ static bool pcfg_ranges_overlap(uint32_t first, size_t first_size,
     return ((uint64_t)first < second_end) && ((uint64_t)second < first_end);
 }
 
+static bool pcfg_memory_overlap(const void *first, size_t first_size,
+                                 const void *second, size_t second_size)
+{
+    uintptr_t a=(uintptr_t)first;
+    uintptr_t b=(uintptr_t)second;
+    if ((first_size==0u) || (second_size==0u)) return false;
+    return a<=b ? (b-a)<first_size : (a-b)<second_size;
+}
+
 static bool pcfg_geometry_valid(const pcfg_config_t *config,
                                 const void *scratch, size_t scratch_size)
 {
@@ -144,12 +153,24 @@ static pcfg_slot_kind_t pcfg_inspect_slot(const pcfg_store_t *store, int slot,
         return info->kind;
     }
 
+    /* A newer-format claim must have a complete CRC-valid envelope.
+     * Otherwise it may simply be an interrupted v1 write. */
+    if (pcfg_get_le32(header_bytes+24u) != pcfg_media_header_crc(header_bytes))
+    {
+        info->kind=PCFG_SLOT_CORRUPT;
+        return info->kind;
+    }
     media_result = pcfg_media_decode_header(header_bytes,
                                             store->config.format_magic,
                                             &info->header);
     if (media_result == PCFG_MEDIA_UNSUPPORTED)
     {
-        info->kind = PCFG_SLOT_UNSUPPORTED;
+        /* Future versions/layouts use the same recognizable prefix. Within
+         * v1, damaged flags/reserved/CRC are corruption, not an upgrade. */
+        info->kind = ((pcfg_get_le32(header_bytes) != store->config.format_magic) ||
+                      (pcfg_get_le16(header_bytes+4u) != PCFG_MEDIA_FORMAT_VERSION) ||
+                      (pcfg_get_le16(header_bytes+6u) != PCFG_MEDIA_HEADER_SIZE)) ?
+                     PCFG_SLOT_UNSUPPORTED : PCFG_SLOT_CORRUPT;
         return info->kind;
     }
     if (media_result != PCFG_MEDIA_VALID)
@@ -263,9 +284,9 @@ static pcfg_status_t pcfg_scan_metadata(pcfg_store_t *store, pcfg_scan_t *scan)
     {
         result = pcfg_sequence_order(&scan->info[0], &scan->info[1],
                                      &newest_slot);
-        if (result != PCFG_OK)
+        if (result == PCFG_SEQUENCE_AMBIGUOUS)
         {
-            return result;
+            newest_slot = 0; /* provisional order until payloads validate */
         }
         scan->order[scan->order_count++] = newest_slot;
         scan->order[scan->order_count++] = 1 - newest_slot;
@@ -336,8 +357,7 @@ static pcfg_status_t pcfg_program_aligned(pcfg_store_t *store, uint32_t address,
     size_t offset = 0u;
 
     if ((size == 0u) || ((address % store->config.program_unit) != 0u) ||
-        ((size % store->config.program_unit) != 0u) ||
-        (size > store->scratch_size))
+        ((size % store->config.program_unit) != 0u))
     {
         return PCFG_INVALID_ARGUMENT;
     }
@@ -443,33 +463,35 @@ static pcfg_status_t pcfg_program_payload(pcfg_store_t *store, uint32_t address,
 static pcfg_status_t pcfg_verify_payload(const pcfg_store_t *store, int slot,
                                          const pcfg_media_header_t *header)
 {
-    size_t remaining = header->payload_size;
-    size_t offset = 0u;
-    uint32_t state = pcfg_crc32_init();
-    uint32_t address = pcfg_slot_address(store, slot, PCFG_MEDIA_HEADER_SIZE);
-
-    if (remaining > store->scratch_size)
+    size_t remaining=header->payload_size;
+    size_t offset=0u;
+    uint32_t state=pcfg_crc32_init();
+    uint32_t address=pcfg_slot_address(store,slot,PCFG_MEDIA_HEADER_SIZE);
+    while (remaining!=0u)
     {
-        return PCFG_SCRATCH_TOO_SMALL;
+        size_t chunk=remaining>store->config.io_chunk_size ? store->config.io_chunk_size : remaining;
+        if (store->storage.read(store->storage_context,address+(uint32_t)offset,
+                                store->scratch,chunk)!=PCFG_OK)
+            return PCFG_STORAGE_ERROR;
+        state=pcfg_crc32_update(state,store->scratch,chunk);
+        offset+=chunk; remaining-=chunk;
     }
-    if (store->storage.read(store->storage_context, address, store->scratch,
-                            remaining) != PCFG_OK)
+    return pcfg_crc32_finish(state)==header->payload_crc32 ? PCFG_OK : PCFG_CORRUPT;
+}
+static pcfg_status_t pcfg_verify_bytes(const pcfg_store_t *store,uint32_t address,
+                                       const uint8_t *expected,size_t size)
+{
+    size_t offset=0;
+    while (offset<size)
     {
-        return PCFG_STORAGE_ERROR;
+        size_t chunk=size-offset;
+        if (chunk>store->config.io_chunk_size) chunk=store->config.io_chunk_size;
+        if (store->storage.read(store->storage_context,address+(uint32_t)offset,
+                               store->scratch,chunk)!=PCFG_OK) return PCFG_STORAGE_ERROR;
+        if (memcmp(store->scratch,expected+offset,chunk)!=0) return PCFG_CORRUPT;
+        offset+=chunk;
     }
-    while (remaining != 0u)
-    {
-        size_t chunk = remaining;
-        if (chunk > store->config.io_chunk_size)
-        {
-            chunk = store->config.io_chunk_size;
-        }
-        state = pcfg_crc32_update(state, store->scratch + offset, chunk);
-        offset += chunk;
-        remaining -= chunk;
-    }
-    return (pcfg_crc32_finish(state) == header->payload_crc32) ?
-           PCFG_OK : PCFG_CORRUPT;
+    return PCFG_OK;
 }
 
 pcfg_status_t pcfg_init(pcfg_store_t *store,
@@ -502,7 +524,7 @@ pcfg_status_t pcfg_init(pcfg_store_t *store,
     return PCFG_OK;
 }
 
-pcfg_status_t pcfg_load(pcfg_store_t *store,
+static pcfg_status_t pcfg_load_impl(pcfg_store_t *store,
                         uint8_t *payload,
                         size_t capacity,
                         size_t *payload_size,
@@ -515,12 +537,13 @@ pcfg_status_t pcfg_load(pcfg_store_t *store,
     int validation_failures = 0;
     int corrupt_candidates = 0;
 
-    if ((store == NULL) || (payload == NULL) || (payload_size == NULL))
+    if ((store == NULL) || (payload_size == NULL))
     {
         return PCFG_INVALID_ARGUMENT;
     }
     *payload_size = 0u;
-    store->reload_required = false;
+    store->reload_required = true;
+    store->scan_complete = false;
     result = pcfg_scan_metadata(store, &scan);
     if ((result != PCFG_OK) && (result != PCFG_CORRUPT) &&
         (result != PCFG_NOT_FOUND))
@@ -529,6 +552,7 @@ pcfg_status_t pcfg_load(pcfg_store_t *store,
     }
     if (scan.order_count == 0)
     {
+        store->reload_required = false;
         return result;
     }
 
@@ -536,7 +560,9 @@ pcfg_status_t pcfg_load(pcfg_store_t *store,
     {
         int candidate = scan.order[order_index];
         size_t candidate_size = scan.info[candidate].header.payload_size;
-        result = pcfg_read_candidate(store, candidate, &scan.info[candidate]);
+        result = ((payload==NULL) && (validate==NULL)) ?
+                 pcfg_verify_payload(store,candidate,&scan.info[candidate].header) :
+                 pcfg_read_candidate(store,candidate,&scan.info[candidate]);
         if (result == PCFG_STORAGE_ERROR)
         {
             return result;
@@ -550,29 +576,49 @@ pcfg_status_t pcfg_load(pcfg_store_t *store,
             corrupt_candidates++;
             continue;
         }
-        if (candidate_size > capacity)
-        {
-            *payload_size = candidate_size;
-            return PCFG_BUFFER_TOO_SMALL;
-        }
         if ((validate != NULL) &&
             (validate(validate_context, store->scratch, candidate_size) != PCFG_OK))
         {
             validation_failures++;
             continue;
         }
-        if (payload != store->scratch)
+        if ((scan.valid_count == 2) &&
+            ((scan.info[0].header.sequence - scan.info[1].header.sequence) == UINT32_C(0x80000000)))
+        {
+            int other=1-candidate;
+            pcfg_status_t other_result=((payload==NULL) && (validate==NULL)) ?
+                pcfg_verify_payload(store,other,&scan.info[other].header) :
+                pcfg_read_candidate(store,other,&scan.info[other]);
+            if ((other_result==PCFG_STORAGE_ERROR) || (other_result==PCFG_SCRATCH_TOO_SMALL))
+                return other_result;
+            if ((other_result==PCFG_OK) &&
+                ((validate==NULL) || (validate(validate_context,store->scratch,
+                  scan.info[other].header.payload_size)==PCFG_OK)))
+                return PCFG_SEQUENCE_AMBIGUOUS;
+            result=((payload==NULL) && (validate==NULL)) ?
+                pcfg_verify_payload(store,candidate,&scan.info[candidate].header) :
+                pcfg_read_candidate(store,candidate,&scan.info[candidate]);
+            if (result!=PCFG_OK) return result;
+        }
+        if ((payload != NULL) && (candidate_size > capacity))
+        {
+            *payload_size = candidate_size;
+            return PCFG_BUFFER_TOO_SMALL;
+        }
+        if ((payload != NULL) && (payload != store->scratch))
         {
             memcpy(payload, store->scratch, candidate_size);
         }
         *payload_size = candidate_size;
         store->active_slot = candidate;
         store->active_sequence = scan.info[candidate].header.sequence;
+        store->reload_required = false;
         return PCFG_OK;
     }
 
     store->active_slot = -1;
     store->active_sequence = 0u;
+    store->reload_required = false;
     if ((validation_failures != 0) && (corrupt_candidates == 0))
     {
         return PCFG_VALIDATION_FAILED;
@@ -584,13 +630,23 @@ pcfg_status_t pcfg_load(pcfg_store_t *store,
     return result;
 }
 
+pcfg_status_t pcfg_load(pcfg_store_t *store,
+                        uint8_t *payload, size_t capacity, size_t *payload_size,
+                        pcfg_validate_fn validate, void *validate_context)
+{
+    if (payload_size != NULL) *payload_size = 0u;
+    if ((store == NULL) || (payload == NULL) ||
+        pcfg_memory_overlap(payload,capacity,store->scratch,store->scratch_size))
+        return PCFG_INVALID_ARGUMENT;
+    return pcfg_load_impl(store,payload,capacity,payload_size,validate,validate_context);
+}
+
 pcfg_status_t pcfg_save(pcfg_store_t *store,
                         const uint8_t *payload,
                         size_t payload_size,
                         pcfg_validate_fn validate,
                         void *validate_context)
 {
-    pcfg_scan_t scan;
     pcfg_status_t result;
     pcfg_media_header_t header;
     pcfg_media_commit_t commit;
@@ -606,6 +662,8 @@ pcfg_status_t pcfg_save(pcfg_store_t *store,
     {
         return PCFG_INVALID_ARGUMENT;
     }
+    if (pcfg_memory_overlap(payload,payload_size,store->scratch,store->scratch_size))
+        return PCFG_INVALID_ARGUMENT;
     maximum_payload = store->config.slot_size - PCFG_MEDIA_HEADER_SIZE -
                       PCFG_MEDIA_COMMIT_SIZE;
     if (payload_size > maximum_payload || payload_size > UINT32_MAX)
@@ -628,13 +686,14 @@ pcfg_status_t pcfg_save(pcfg_store_t *store,
 
     if (!store->scan_complete)
     {
-        result = pcfg_scan_metadata(store, &scan);
-        if ((result == PCFG_STORAGE_ERROR) ||
-            (result == PCFG_UNSUPPORTED_VERSION) ||
-            (result == PCFG_SEQUENCE_AMBIGUOUS))
+        size_t loaded_size = 0u;
+        result = pcfg_load_impl(store,NULL,0u,&loaded_size,validate,validate_context);
+        if ((result != PCFG_OK) && (result != PCFG_NOT_FOUND) &&
+            (result != PCFG_CORRUPT) && (result != PCFG_VALIDATION_FAILED))
         {
             return result;
         }
+        if (store->read_only) return PCFG_READ_ONLY;
     }
 
     target = (store->active_slot == 0) ? 1 : 0;
@@ -676,7 +735,8 @@ pcfg_status_t pcfg_save(pcfg_store_t *store,
         store->reload_required = true;
         return PCFG_STORAGE_ERROR;
     }
-    result = pcfg_verify_payload(store, target, &header);
+    result = pcfg_verify_bytes(store,target_address,header_bytes,sizeof(header_bytes));
+    if (result == PCFG_OK) result = pcfg_verify_payload(store, target, &header);
     if (result != PCFG_OK)
     {
         store->reload_required = true;
@@ -702,6 +762,16 @@ pcfg_status_t pcfg_save(pcfg_store_t *store,
         return PCFG_STORAGE_ERROR;
     }
 
+    result=pcfg_verify_bytes(store,target_address,header_bytes,sizeof(header_bytes));
+    if (result==PCFG_OK)
+        result=pcfg_verify_bytes(store,target_address+(uint32_t)store->config.slot_size-PCFG_MEDIA_COMMIT_SIZE,
+                                commit_bytes,sizeof(commit_bytes));
+    if (result==PCFG_OK) result=pcfg_verify_payload(store,target,&header);
+    if (result!=PCFG_OK)
+    {
+        store->reload_required=true;
+        return result;
+    }
     store->active_slot = target;
     store->active_sequence = sequence;
     store->scan_complete = true;

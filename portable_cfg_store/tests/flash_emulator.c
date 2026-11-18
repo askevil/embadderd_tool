@@ -25,6 +25,7 @@ static pcfg_status_t flash_read(void *ctx, uint32_t address, void *dst,
     pcfg_flash_t *flash = (pcfg_flash_t *)ctx;
     size_t prefix;
     flash->operation_count++;
+    if (flash->operation_count <= 256u) flash->operation_size[flash->operation_count - 1u] = size;
     if ((dst == NULL) || !range_valid(flash, address, size))
     {
         return PCFG_STORAGE_ERROR;
@@ -33,6 +34,7 @@ static pcfg_status_t flash_read(void *ctx, uint32_t address, void *dst,
     memcpy(dst, flash->bytes + address, prefix);
     if (fault_matches(flash))
     {
+        flash->fault_hits++;
         flash->fault_enabled = 0;
         return PCFG_STORAGE_ERROR;
     }
@@ -48,6 +50,7 @@ static pcfg_status_t flash_program(void *ctx, uint32_t address,
     size_t prefix;
     int injected;
     flash->operation_count++;
+    if (flash->operation_count <= 256u) flash->operation_size[flash->operation_count - 1u] = size;
 
     if ((input == NULL) || !range_valid(flash, address, size) ||
         ((address % flash->program_unit) != 0u) ||
@@ -59,14 +62,15 @@ static pcfg_status_t flash_program(void *ctx, uint32_t address,
         return PCFG_STORAGE_ERROR;
     }
     injected = fault_matches(flash);
-    prefix = injected ? fault_prefix(flash, size) : size;
+    prefix = injected ? (flash->fault_may_persist ? fault_prefix(flash, size) : 0u) : size;
     for (index = 0u; index < prefix; ++index)
     {
         if ((flash->bytes[address + index] & input[index]) != input[index])
         {
             if (injected)
             {
-                flash->fault_enabled = 0;
+                flash->fault_hits++;
+        flash->fault_enabled = 0;
             }
             return PCFG_STORAGE_ERROR;
         }
@@ -81,6 +85,7 @@ static pcfg_status_t flash_program(void *ctx, uint32_t address,
     }
     if (injected)
     {
+        flash->fault_hits++;
         flash->fault_enabled = 0;
         return PCFG_STORAGE_ERROR;
     }
@@ -93,6 +98,7 @@ static pcfg_status_t flash_erase(void *ctx, uint32_t address, size_t size)
     size_t prefix;
     int injected;
     flash->operation_count++;
+    if (flash->operation_count <= 256u) flash->operation_size[flash->operation_count - 1u] = size;
     if (!range_valid(flash, address, size) ||
         ((address % flash->erase_unit) != 0u) ||
         ((size % flash->erase_unit) != 0u))
@@ -100,7 +106,7 @@ static pcfg_status_t flash_erase(void *ctx, uint32_t address, size_t size)
         return PCFG_STORAGE_ERROR;
     }
     injected = fault_matches(flash);
-    prefix = injected ? fault_prefix(flash, size) : size;
+    prefix = injected ? (flash->fault_may_persist ? fault_prefix(flash, size) : 0u) : size;
     memset(flash->bytes + address, 0xff, prefix);
     if (prefix != 0u)
     {
@@ -108,6 +114,7 @@ static pcfg_status_t flash_erase(void *ctx, uint32_t address, size_t size)
     }
     if (injected)
     {
+        flash->fault_hits++;
         flash->fault_enabled = 0;
         return PCFG_STORAGE_ERROR;
     }
@@ -118,8 +125,10 @@ static pcfg_status_t flash_sync(void *ctx)
 {
     pcfg_flash_t *flash = (pcfg_flash_t *)ctx;
     flash->operation_count++;
+    if (flash->operation_count <= 256u) flash->operation_size[flash->operation_count - 1u] = 0u;
     if (fault_matches(flash))
     {
+        flash->fault_hits++;
         flash->fault_enabled = 0;
         return PCFG_STORAGE_ERROR;
     }
@@ -147,6 +156,7 @@ void pcfg_flash_init(pcfg_flash_t *flash, uint8_t *bytes, size_t size,
 void pcfg_flash_reset_faults(pcfg_flash_t *flash)
 {
     flash->operation_count = 0u;
+    flash->fault_hits = 0u;
     flash->fault_enabled = 0;
     flash->fault_operation = SIZE_MAX;
     flash->fault_after_bytes = SIZE_MAX;

@@ -56,3 +56,7 @@ Sequence `a` is newer than `b` when `(int32_t)(a - b) > 0`. Equal sequences dete
 A slot is selectable only if header fields and CRC, length bounds, payload CRC, commit fields, and commit CRC all pass. An optional application validator may reject a structurally valid payload, in which case the older valid slot is considered.
 
 If a newer unknown format coexists with a supported slot, the supported slot may be loaded, but the store becomes read-only so old firmware cannot overwrite the unknown data.
+
+## Future-format recognition
+
+A future incompatible format must retain the 32-byte CRC envelope (header CRC at offset 24, computed over 0..23 and 28..31) to be recognized by v1 as unknown/read-only. A valid envelope with a different magic, version, or header-size claim is protected. Incomplete headers and damaged v1 flags/reserved/CRC are corrupt, not an upgrade. This is a compatibility convention, not malicious-write protection. Unrecognizable arbitrary future layouts require an application migration policy before downgrade.

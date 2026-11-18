@@ -79,6 +79,10 @@ pcfg_status_t pcfg_init(pcfg_store_t *store,
                         void *scratch,
                         size_t scratch_size);
 
+/* Output and save input must not overlap scratch. Failed loads preserve output.
+ * Load/semantic recovery requires scratch >= candidate payload length.
+ * Save/readback without a semantic validator streams through io_chunk_size.
+ * Hold one external transaction lock for every complete API call. */
 pcfg_status_t pcfg_load(pcfg_store_t *store,
                         uint8_t *payload,
                         size_t capacity,

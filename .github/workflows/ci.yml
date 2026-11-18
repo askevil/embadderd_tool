@@ -1,0 +1,34 @@
+name: portable-config-store
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {cc: gcc, cxx: g++, sanitize: 'OFF'}
+          - {cc: clang, cxx: clang++, sanitize: 'OFF'}
+          - {cc: clang, cxx: clang++, sanitize: 'ON'}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DaveGamble/cJSON
+          ref: 6d9f2443ab071f86e5d9b43025a40929ec41c46c
+          path: external/cJSON
+      - name: Configure core with RT-Thread stubs
+        run: cmake -S portable_cfg_store -B build-core -DPCFG_BUILD_RTTHREAD_ADAPTER=ON -DPCFG_ENABLE_SANITIZERS=${{ matrix.sanitize }}
+      - run: cmake --build build-core --parallel
+      - run: ctest --test-dir build-core --output-on-failure --no-tests=error
+      - name: Configure optional cJSON (external dependency)
+        run: cmake -S portable_cfg_store/tests/cjson_driver -B build-json -DPCFG_CJSON_SOURCE_DIR=${{ github.workspace }}/external/cJSON -DPCFG_BUILD_RTTHREAD_ADAPTER=ON -DPCFG_ENABLE_SANITIZERS=${{ matrix.sanitize }}
+      - run: cmake --build build-json --parallel
+      - run: ctest --test-dir build-json --output-on-failure --no-tests=error
+      - name: Run repository checks
+        run: python3 tests/run_checks.py
