@@ -51,3 +51,9 @@ Keep serialization/codec decisions above this core. A typical RTOS wrapper owns:
 - deferred-save policy.
 
 The optional RT-Thread adapter maps `rt_device` read/write plus an application erase callback to these generic operations; it does not choose a device name, address, or mutex.
+
+### Building the RT-Thread adapter
+
+Enable `PCFG_BUILD_RTTHREAD_ADAPTER=ON`. Supply `PCFG_RTTHREAD_INCLUDE_DIR` with the application RT-Thread include paths; when empty in host tests, minimal stubs exercise callback mappings only. Real builds must not ship the stubs. `rt_device_read/write` must report **bytes**, not blocks. Devices with block semantics require an application translation layer. Short transfers are errors. The adapter rejects addresses not representable by signed `rt_off_t`. Application erase/sync callbacks own controller-specific commands and durability barriers. The application must open the device and hold the complete transaction lock.
+
+No board/controller was validated by the stub test. Confirm byte offsets, erase units, program-page behavior, short-I/O handling, and power-cut recovery on the target board before deployment.
