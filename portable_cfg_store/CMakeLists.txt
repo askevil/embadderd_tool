@@ -63,4 +63,11 @@ if(PCFG_BUILD_TESTS)
     target_link_libraries(test_fault_injection PRIVATE pcfg_store)
     target_compile_options(test_fault_injection PRIVATE -Wall -Wextra -Werror -Wpedantic)
     add_test(NAME pcfg_fault_injection COMMAND test_fault_injection)
+
+    add_executable(pcfg_posix_memory_example examples/posix_memory/main.c)
+    target_link_libraries(pcfg_posix_memory_example PRIVATE pcfg_store)
+    target_compile_options(pcfg_posix_memory_example PRIVATE -Wall -Wextra -Werror -Wpedantic)
+    add_test(NAME pcfg_posix_example COMMAND pcfg_posix_memory_example)
+    set_tests_properties(pcfg_posix_example PROPERTIES
+        PASS_REGULAR_EXPRESSION "loaded: brightness=42;sequence: 1;loaded default: brightness=10")
 endif()
